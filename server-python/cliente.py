@@ -1,133 +1,162 @@
 import requests
-import numpy as np
 import time
 import random
+import json
+import csv
 import os
-import matplotlib.pyplot as plt
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ==============================================================================
-# FUNÇÕES DE APOIO PARA O CLIENTE
-# ==============================================================================
+URL_CPP = "http://127.0.0.1:5000/reconstruir"
+URL_PYTHON = "http://127.0.0.1:5001/reconstruir"
 
-def carregar_ou_criar_npy(caminho_csv, delimiter=','):
-    """
-    Carrega um array NumPy de um arquivo .npy se ele existir.
-    Caso contrário, carrega do .csv, cria o .npy para futuras execuções,
-    e retorna o array.
-    """
-    caminho_npy = caminho_csv.replace('.csv', '.npy')
-    if os.path.exists(caminho_npy):
-        print(f"Carregando dados pré-processados de: {caminho_npy}")
-        dados = np.load(caminho_npy)
-    else:
-        print(f"Carregando e processando pela primeira vez: {caminho_csv}")
-        if not os.path.exists(caminho_csv):
-            raise FileNotFoundError(f"ERRO: O arquivo CSV original não foi encontrado em: {caminho_csv}")
-        dados = np.loadtxt(caminho_csv, delimiter=delimiter)
-        print(f"Salvando dados em formato .npy para acesso rápido: {caminho_npy}")
-        np.save(caminho_npy, dados)
-    return dados
+NUMERO_DE_TESTES = 10
+MAX_THREADS = 4
+SEED = 42
 
-def salvar_imagem(vetor_f, largura, altura, nome_arquivo="imagem_reconstruida.png"):
-    """
-    Converte o vetor da imagem 'f' em uma matriz 2D e a salva como um arquivo de imagem.
-    """
-    if len(vetor_f) != largura * altura:
-        raise ValueError("O tamanho do vetor 'f' não corresponde às dimensões da imagem.")
-    
-    imagem_matrix = np.array(vetor_f).reshape((altura, largura))
+OPCOES = [
+    {"H": "dados/modelo1/H-1.csv", "G": ["dados/modelo1/G-1.csv"], "w": 60, "h": 60, "s": 794, "n": 64, "tipo": "M1"},
+    {"H": "dados/modelo1/H-1.csv", "G": ["dados/modelo1/G-2.csv"], "w": 60, "h": 60, "s": 794, "n": 64, "tipo": "M1"},
+    {"H": "dados/modelo1/H-1.csv", "G": ["dados/modelo1/G-3.csv"], "w": 60, "h": 60, "s": 794, "n": 64, "tipo": "M1"},
+    {"H": "dados/modelo2/H-2.csv", "G": ["dados/modelo2/G-1.csv"], "w": 30, "h": 30, "s": 436, "n": 64, "tipo": "M2"},
+    {"H": "dados/modelo2/H-2.csv", "G": ["dados/modelo2/G-2.csv"], "w": 30, "h": 30, "s": 436, "n": 64, "tipo": "M2"},
+    {"H": "dados/modelo2/H-2.csv", "G": ["dados/modelo2/G-3.csv"], "w": 30, "h": 30, "s": 436, "n": 64, "tipo": "M2"}
+]
 
-    # Normaliza a imagem para melhor contraste visual
-    f_min, f_max = imagem_matrix.min(), imagem_matrix.max()
-    imagem_normalizada = (imagem_matrix - f_min) / (f_max - f_min)
+def gerar_tarefas_aleatorias(qtd):
+    random.seed(SEED)
+    tarefas = []
 
-    plt.imsave(nome_arquivo, imagem_normalizada, cmap='gray')
-    print(f"  -> Imagem salva com sucesso como '{nome_arquivo}'")
+    print(f"\n--- Sorteando {qtd} tarefas aleatórias ---")
+    for i in range(qtd):
+        config_base = random.choice(OPCOES)
+        g_escolhido = random.choice(config_base["G"])
 
-# ==============================================================================
-# LÓGICA PRINCIPAL DO CLIENTE
-# ==============================================================================
+        id_unico = str(uuid.uuid4())[:8]
 
-# --- Configurações ---
-URL_SERVIDOR_PYTHON = "http://127.0.0.1:5000/reconstruir"
-# URL_SERVIDOR_JAVA = "http://127.0.0.1:8080/reconstruir" # (Quando você criar o servidor Java)
+        tarefa = {
+            "id": i + 1,
+            "caminho_h": config_base["H"],
+            "caminho_g": g_escolhido,
+            "nome_arquivo_base": f"teste_{i+1}_{config_base['tipo']}_{id_unico}",
+            "largura": config_base["w"],
+            "altura": config_base["h"],
+            "s": config_base["s"],
+            "n": config_base["n"]
+        }
+        tarefas.append(tarefa)
+    return tarefas
 
-# Lista de sinais a serem enviados para reconstrução
-SINAIS_DE_TESTE = {
-    "imagem_1_60x60": r'Img1/G-1.csv',
-    "imagem_2_60x60": r'Dados/Img1/G-2.csv', # Verifique o caminho correto
-    "imagem_3_60x60": r'Dados/Img1/G-3.csv'  # Verifique o caminho correto
-}
+def enviar_uma_tarefa(dados_pacote):
+    url, tarefa, nome_servidor = dados_pacote
 
-def main():
-    print("--- Iniciando Aplicação Cliente ---")
-    
-    relatorio_final = []
-
-    # Itera sobre a lista de sinais de teste
-    for nome_amigavel, caminho_sinal_g in SINAIS_DE_TESTE.items():
-        print(f"\n--------------------------------------------------")
-        print(f"Processando: {nome_amigavel}")
-        
+    while True:
         try:
-            # 1. Carrega o vetor de sinal do arquivo
-            g_vetor = carregar_ou_criar_npy(caminho_sinal_g, delimiter=',')
-            
-            # 2. Prepara o payload JSON para enviar ao servidor
-            payload = {"sinal_g": g_vetor.tolist()} 
-            
-            # 3. Envia a requisição POST para o servidor e mede o tempo
-            print(f"Enviando requisição para {URL_SERVIDOR_PYTHON}...")
-            start_req = time.time()
-            response = requests.post(URL_SERVIDOR_PYTHON, json=payload, timeout=300) # Timeout de 5min
-            end_req = time.time()
-            response.raise_for_status() # Lança um erro se a resposta for 4xx ou 5xx
-            
-            print(f"Resposta recebida em {end_req - start_req:.2f} segundos.")
-            resultado = response.json()
-            
-            # 4. Processa a resposta e salva os resultados
-            metadata = resultado['metadata']
-            
-            # Adiciona o nome do arquivo ao relatório
-            metadata['arquivo_sinal'] = caminho_sinal_g
-            relatorio_final.append(metadata)
+            start = time.time()
+            resp = requests.post(url, json=tarefa)
+            duracao_req = time.time() - start
 
-            # Salva a imagem recebida
-            nome_arquivo_saida = f"resultado_{nome_amigavel}_py.png"
-            salvar_imagem(
-                resultado['imagem_f'], 
-                metadata['pixels_largura'], 
-                metadata['pixels_altura'], 
-                nome_arquivo_saida
-            )
+            if resp.status_code == 200:
+                dados = resp.json()
+                img_nome = dados.get('imagem_gerada') or dados.get('imagem_gerada_ruidosa')
+                iters = dados.get('iteracoes') or dados.get('iteracoes_executadas')
+                tempo_algo = dados.get('tempo_reconstrucao_s', 0.0)
+                memoria = dados.get('memoria_mb', 0.0)
 
-            # 5. Aguarda um tempo aleatório antes da próxima requisição
-            intervalo = random.uniform(2, 6) # Espera entre 2 e 6 segundos
-            print(f"Aguardando {intervalo:.2f} segundos...")
+                print(f"[{nome_servidor}] CONCLUÍDO: {tarefa['nome_arquivo_base']} ({tempo_algo:.4f}s)")
+
+                return {
+                    "tarefa": tarefa["nome_arquivo_base"],
+                    "versao": nome_servidor,
+                    "status": "sucesso",
+                    "iteracoes": iters,
+                    "tempo_algoritmo_s": tempo_algo,
+                    "tempo_total_req_s": duracao_req,
+                    "memoria_mb": memoria,
+                    "imagem": img_nome,
+                    "erro_msg": ""
+                }
+
+            elif resp.status_code == 503:
+                wait_time = random.uniform(4.0, 10.0)
+                print(f"[{nome_servidor}] Servidor CHEIO. Aguardando {wait_time:.1f}s p/ {tarefa['nome_arquivo_base']}...")
+                time.sleep(wait_time)
+                continue
+
+            else:
+                print(f"[{nome_servidor}] ERRO {resp.status_code} em {tarefa['nome_arquivo_base']}")
+                return {
+                    "tarefa": tarefa["nome_arquivo_base"],
+                    "versao": nome_servidor,
+                    "status": "erro_http",
+                    "iteracoes": 0, "tempo_algoritmo_s": 0.0, "tempo_total_req_s": 0.0, "memoria_mb": 0.0,
+                    "imagem": "", "erro_msg": f"HTTP {resp.status_code}"
+                }
+
+        except Exception as e:
+            print(f"[{nome_servidor}] FALHA em {tarefa['nome_arquivo_base']}: {e}")
+            return {
+                "tarefa": tarefa["nome_arquivo_base"],
+                "versao": nome_servidor,
+                "status": "falha_conexao",
+                "iteracoes": 0, "tempo_algoritmo_s": 0.0, "tempo_total_req_s": 0.0, "memoria_mb": 0.0,
+                "imagem": "", "erro_msg": str(e)
+            }
+
+def executar_lote_paralelo(nome_servidor, url, lista_tarefas):
+    print(f"\n{'='*60}\n>>> INICIANDO TESTES PARALELOS: {nome_servidor} ({url})\n{'='*60}")
+    resultados = []
+    futures = []
+
+    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        for tarefa in lista_tarefas:
+            intervalo = random.uniform(3.0, 6.0)
+            print(f"[{nome_servidor}] Enviando {tarefa['nome_arquivo_base']}... (Prox em {intervalo:.1f}s)")
+
+            future = executor.submit(enviar_uma_tarefa, (url, tarefa, nome_servidor))
+            futures.append(future)
             time.sleep(intervalo)
 
-        except FileNotFoundError:
-            print(f"AVISO: Arquivo de sinal não encontrado: {caminho_sinal_g}. Pulando para o próximo.")
-            continue
-        except requests.exceptions.RequestException as e:
-            print(f"ERRO CRÍTICO: Não foi possível se comunicar com o servidor. {e}")
-            print("Verifique se o servidor_python.py está em execução.")
-            break
-            
-    print("\n======================================================")
-    print("RELATÓRIO FINAL CONSOLIDADO")
-    print("======================================================")
-    if not relatorio_final:
-        print("Nenhuma imagem foi processada.")
-    else:
-        for item in relatorio_final:
-            print(f"\n- Sinal de Entrada: {item['arquivo_sinal']}")
-            print(f"  - Algoritmo: {item['algoritmo']}")
-            print(f"  - Duração (servidor): {item['tempo_s']:.4f}s")
-            print(f"  - Iterações: {item['iteracoes']}")
-            print(f"  - Início: {item['inicio_reconstrucao']}")
-            print(f"  - Término: {item['termino_reconstrucao']}")
+        print(f"\n[{nome_servidor}] Todas as tarefas enviadas! Aguardando retornos...\n")
 
-if __name__ == '__main__':
-    main()
+        for future in as_completed(futures):
+            res = future.result()
+            resultados.append(res)
+
+    return resultados
+
+def salvar_relatorio_csv_formatado(res_py, res_cpp, nome_arquivo="relatorio_final.csv"):
+    todos_dados = res_py + res_cpp
+    colunas = ["tarefa", "versao", "status", "iteracoes", "tempo_algoritmo_s", "tempo_total_req_s", "memoria_mb", "imagem", "erro_msg"]
+
+    arquivo_existe = os.path.isfile(nome_arquivo)
+
+    try:
+        with open(nome_arquivo, mode='a', newline='', encoding='utf-8-sig') as f:
+            writer = csv.DictWriter(f, fieldnames=colunas, delimiter=';')
+
+            if not arquivo_existe:
+                writer.writeheader()
+
+            for linha in todos_dados:
+                linha_formatada = {}
+                for k in colunas:
+                    valor = linha.get(k, "")
+                    if isinstance(valor, float):
+                        valor = f"{valor:.4f}".replace('.', ',')
+                    linha_formatada[k] = valor
+                writer.writerow(linha_formatada)
+        print(f"\n[SUCESSO] Relatório atualizado: {os.path.abspath(nome_arquivo)}")
+    except Exception as e:
+        print(f"\n[ERRO] CSV: {e}")
+
+if __name__ == "__main__":
+    fila = gerar_tarefas_aleatorias(NUMERO_DE_TESTES)
+
+    #res_py = executar_lote_paralelo("Python", URL_PYTHON, fila)
+    #res_cpp = []
+
+    res_py = []
+    res_cpp = executar_lote_paralelo("C++", URL_CPP, fila)
+
+    salvar_relatorio_csv_formatado(res_py, res_cpp)

@@ -1,0 +1,10 @@
+Img1/
+*.csv
+*.npy
+*.bin
+*.exe
+*.png
+*.jpg
+*.jpeg
+*.json
+*.pgm

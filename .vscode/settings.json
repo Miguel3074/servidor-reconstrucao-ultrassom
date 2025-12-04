@@ -1,4 +1,5 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:system",
-    "python-envs.pythonProjects": []
+    "python-envs.pythonProjects": [],
+    "cmake.sourceDirectory": "F:/OneDrive - alta-rt.com/Documentos/facul/servidor-reconstrucao-ultrassom/server-c++"
 }
